@@ -780,19 +780,53 @@ const GDRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
 let _gToken = null;
 let _gFileId = null;
 
+function isMobile(){ return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent); }
+
 function driveLogin() {
-  const client = google.accounts.oauth2.initTokenClient({
-    client_id: GDRIVE_CLIENT_ID,
-    scope: GDRIVE_SCOPE,
-    callback: async (resp) => {
-      if (resp.error) { console.error('Drive login error:', resp); return; }
-      _gToken = resp.access_token;
-      localStorage.setItem('gdrive_token', _gToken);
-      updateDriveUI(true);
-      await driveLoad();
-    }
-  });
-  client.requestAccessToken();
+  if (isMobile()) {
+    // Su mobile usa redirect flow
+    const params = new URLSearchParams({
+      client_id: GDRIVE_CLIENT_ID,
+      redirect_uri: window.location.origin + window.location.pathname,
+      response_type: 'token',
+      scope: GDRIVE_SCOPE,
+      include_granted_scopes: 'true',
+      state: 'drive_login'
+    });
+    window.location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString();
+  } else {
+    // Su desktop usa popup flow
+    const client = google.accounts.oauth2.initTokenClient({
+      client_id: GDRIVE_CLIENT_ID,
+      scope: GDRIVE_SCOPE,
+      callback: async (resp) => {
+        if (resp.error) { console.error('Drive login error:', resp); return; }
+        _gToken = resp.access_token;
+        localStorage.setItem('gdrive_token', _gToken);
+        updateDriveUI(true);
+        await driveLoad();
+      }
+    });
+    client.requestAccessToken();
+  }
+}
+
+// Gestisce il redirect OAuth al ritorno da Google
+function handleOAuthRedirect() {
+  const hash = window.location.hash;
+  if (!hash) return;
+  const params = new URLSearchParams(hash.slice(1));
+  const token = params.get('access_token');
+  const state = params.get('state');
+  if (token && state === 'drive_login') {
+    _gToken = token;
+    localStorage.setItem('gdrive_token', token);
+    // Pulisci il token dall'URL
+    history.replaceState(null, '', window.location.pathname);
+    updateDriveUI(true);
+    driveLoad();
+    showToast('Connesso a Google Drive');
+  }
 }
 
 function driveLogout() {
@@ -906,6 +940,7 @@ function saveLog() {
 
 /* INIT */
 loadSettings();
+handleOAuthRedirect();
 updateDateDisplay();
 renderChildren();
 updateStats();
