@@ -195,6 +195,16 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
     <div class="field-row"><div class="field-label">Username</div><input class="field-input" id="syncUser" type="text" value="l.altieri" autocomplete="username"></div>
     <div class="field-row"><div class="field-label">Password</div><input class="field-input" id="syncPass" type="password" value="91967" autocomplete="current-password"></div>
   </div>
+  <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
+    <div style="flex:1">
+      <div class="field-label">Da</div>
+      <input class="field-input" id="syncDateFrom" type="date">
+    </div>
+    <div style="flex:1">
+      <div class="field-label">A</div>
+      <input class="field-input" id="syncDateTo" type="date">
+    </div>
+  </div>
   <div class="status-msg" id="syncStatus"></div>
   <div class="sync-card" id="syncPreview" style="display:none">
     <h3>Riepilogo da caricare</h3>
@@ -692,8 +702,14 @@ async function startSync(){
   const username=document.getElementById('syncUser').value.trim(),password=document.getElementById('syncPass').value.trim();
   const btn=document.getElementById('btnSync'),label=document.getElementById('btnSyncLabel');
   if(!username||!password){showStatus('error','Inserisci username e password');return}
+  const dateFrom = document.getElementById('syncDateFrom').value;
+  const dateTo = document.getElementById('syncDateTo').value;
   const unsync=[];
-  Object.keys(allLogs).forEach(date=>{(allLogs[date]||[]).forEach((e,i)=>{if(!e.synced)unsync.push({entry:e,date,idx:i})})});
+  Object.keys(allLogs).forEach(date=>{
+    if(dateFrom && date < dateFrom) return;
+    if(dateTo && date > dateTo) return;
+    (allLogs[date]||[]).forEach((e,i)=>{if(!e.synced)unsync.push({entry:e,date,idx:i})});
+  });
   if(unsync.length===0){showStatus('info','Nessuna presenza da caricare.');return}
   btn.disabled=true;label.innerHTML='<span class="spinner"></span> Connessione...';
   const base=getBaseURL();
@@ -911,7 +927,7 @@ async function sheetsInit() {
     const sheet = await create.json();
     _gSheetId = sheet.spreadsheetId;
     // Intestazioni
-    await sheetsWrite([['Data','Bambino','Entrata','Uscita','Colazione','Pranzo','Merenda','Cena','Sincronizzato']]);
+    await sheetsWrite([['Data','Bambino','Entrata','Uscita','Malattia 50%','Pattuite','Colazione','Pranzo','Merenda','Cena','Sincronizzato']]);
   }
   localStorage.setItem('g_sheet_id', _gSheetId);
   await sheetsLoad();
@@ -968,16 +984,23 @@ async function sheetsSave() {
   if (!_gSheetId || !_gToken) return;
   // Riscrivi tutto il foglio
   const rows = [['Data','Bambino','Entrata','Uscita','Colazione','Pranzo','Merenda','Cena','Sincronizzato']];
+  // Raccoglie tutte le righe e le ordina per data poi per ora entrata
+  const allRows = [];
   Object.keys(allLogs).sort().forEach(date => {
     (allLogs[date]||[]).forEach(e => {
       const child = CHILDREN.find(c => c.recordcode === e.recordcode);
       const nome = child ? child.lastname+' '+child.name : e.recordcode;
-      rows.push([date, nome, e.timeIn||'', e.timeOut||'',
+      allRows.push({ date, timeIn: e.timeIn||'', row: [date, nome, e.timeIn||'', e.timeOut||'',
         e.chkColazione?'Si':'', e.chkPranzo?'Si':'',
         e.chkMerenda?'Si':'', e.chkCena?'Si':'',
-        e.synced?'Si':'No']);
+        e.synced?'Si':'No'] });
     });
   });
+  allRows.sort((a,b) => {
+    if (a.date !== b.date) return a.date.localeCompare(b.date);
+    return (a.timeIn||'').localeCompare(b.timeIn||'');
+  });
+  allRows.forEach(r => rows.push(r.row));
   await sheetsWrite(rows, false);
 }
 
@@ -1091,12 +1114,27 @@ async function driveSyncNow() {
 // Hook: saveLog salva anche su Sheets
 function saveLog() {
   allLogs[activeDate] = log;
-  saveAllLogs();
-  if (_gToken) sheetsSave();
+  // Salva sempre su Sheets se connesso, localStorage solo come fallback offline
+  if (_gToken) {
+    sheetsSave();
+  } else {
+    saveAllLogs();
+  }
 }
 
 /* INIT */
 loadSettings();
+// Default date range = mese corrente
+(function(){
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth()+1).padStart(2,'0');
+  const lastDay = new Date(y, now.getMonth()+1, 0).getDate();
+  const from = document.getElementById('syncDateFrom');
+  const to = document.getElementById('syncDateTo');
+  if(from) from.value = y+'-'+m+'-01';
+  if(to) to.value = y+'-'+m+'-'+String(lastDay).padStart(2,'0');
+})();
 handleOAuthRedirect();
 updateDateDisplay();
 renderChildren();
