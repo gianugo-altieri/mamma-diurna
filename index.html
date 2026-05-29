@@ -6,7 +6,6 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#2d5a3d">
 <title>Mamma Diurna · Altieri</title>
-<script src="https://accounts.google.com/gsi/client" async defer></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
@@ -774,30 +773,218 @@ function exportCSV(){
   a.download='presenze_'+activeDate+'.csv';a.click();showToast('CSV esportato');
 }
 
-/* GOOGLE DRIVE SYNC */
-const GDRIVE_CLIENT_ID = '302006355735-3aa1vgt29vp250um06bai9i7iciv9u2n.apps.googleusercontent.com';
-const GDRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
+/* GOOGLE SHEETS SYNC — PKCE flow */
+const G_CLIENT_ID = '302006355735-3aa1vgt29vp250um06bai9i7iciv9u2n.apps.googleusercontent.com';
+const G_SCOPE = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file';
+const G_REDIRECT = 'https://gianugo-altieri.github.io/mamma-diurna/';
 let _gToken = null;
-let _gFileId = null;
+let _gRefresh = null;
+let _gSheetId = null;
 
-function driveLogin() {
-  const client = google.accounts.oauth2.initTokenClient({
-    client_id: GDRIVE_CLIENT_ID,
-    scope: GDRIVE_SCOPE,
-    callback: async (resp) => {
-      if (resp.error) { console.error('Drive login error:', resp); return; }
-      _gToken = resp.access_token;
-      localStorage.setItem('gdrive_token', _gToken);
-      updateDriveUI(true);
-      await driveLoad();
-    }
-  });
-  // ux_mode:'popup' funziona sia su desktop che mobile con GIS library
-  client.requestAccessToken({ prompt: 'consent' });
+// PKCE helpers
+async function pkceChallenge() {
+  const verifier = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
+    .replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  const challenge = btoa(String.fromCharCode(...new Uint8Array(hash)))
+    .replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+  return { verifier, challenge };
 }
 
-function handleOAuthRedirect() {
-  // Non più necessario con GIS popup flow
+async function driveLogin() {
+  const { verifier, challenge } = await pkceChallenge();
+  localStorage.setItem('pkce_verifier', verifier);
+  const params = new URLSearchParams({
+    client_id: G_CLIENT_ID,
+    redirect_uri: G_REDIRECT,
+    response_type: 'code',
+    scope: G_SCOPE,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    access_type: 'offline',
+    prompt: 'consent'
+  });
+  window.location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + params;
+}
+
+async function handleOAuthRedirect() {
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get('code');
+  if (!code) {
+    // Try to restore saved token
+    const saved = localStorage.getItem('g_token');
+    const sheetId = localStorage.getItem('g_sheet_id');
+    if (saved) { _gToken = saved; _gSheetId = sheetId; updateDriveUI(true); sheetsLoad(); }
+    return;
+  }
+  // Exchange code for token via worker
+  history.replaceState(null, '', G_REDIRECT);
+  const verifier = localStorage.getItem('pkce_verifier');
+  localStorage.removeItem('pkce_verifier');
+  const base = getBaseURL().replace('/api','');
+  try {
+    const resp = await fetch(base + '/auth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, code_verifier: verifier })
+    });
+    const data = await resp.json();
+    if (data.access_token) {
+      _gToken = data.access_token;
+      _gRefresh = data.refresh_token;
+      localStorage.setItem('g_token', _gToken);
+      if (_gRefresh) localStorage.setItem('g_refresh', _gRefresh);
+      updateDriveUI(true);
+      showToast('Connesso a Google');
+      await sheetsInit();
+    } else {
+      showToast('Errore login: ' + (data.error || 'sconosciuto'));
+    }
+  } catch(e) {
+    showToast('Errore connessione: ' + e.message);
+  }
+}
+
+function driveLogout() {
+  _gToken = null; _gRefresh = null; _gSheetId = null;
+  localStorage.removeItem('g_token');
+  localStorage.removeItem('g_refresh');
+  localStorage.removeItem('g_sheet_id');
+  updateDriveUI(false);
+  showToast('Disconnesso da Google');
+}
+
+function updateDriveUI(connected) {
+  const status = document.getElementById('driveStatus');
+  const btnLogin = document.getElementById('btnDriveLogin');
+  const btnLogout = document.getElementById('btnDriveLogout');
+  const btnSync = document.getElementById('btnDriveSync');
+  if (!status) return;
+  if (connected) {
+    status.textContent = 'Connesso a Google Sheets';
+    status.style.color = 'var(--accent)';
+    btnLogin.style.display = 'none';
+    btnLogout.style.display = 'block';
+    btnSync.style.display = 'block';
+  } else {
+    status.textContent = 'Non connesso';
+    status.style.color = 'var(--text3)';
+    btnLogin.style.display = 'block';
+    btnLogout.style.display = 'none';
+    btnSync.style.display = 'none';
+  }
+}
+
+async function gFetch(url, opts={}) {
+  if (!_gToken) return null;
+  const resp = await fetch(url, {
+    ...opts,
+    headers: { 'Authorization': 'Bearer ' + _gToken, ...(opts.headers||{}) }
+  });
+  if (resp.status === 401) { driveLogout(); return null; }
+  return resp;
+}
+
+async function sheetsInit() {
+  // Cerca foglio esistente o ne crea uno nuovo
+  const s = getSettings();
+  const name = 'Mamma Diurna - ' + (s.name || 'Altieri');
+  // Cerca
+  const search = await gFetch(
+    `https://www.googleapis.com/drive/v3/files?q=name='${name}' and mimeType='application/vnd.google-apps.spreadsheet'&fields=files(id,name)`
+  );
+  if (!search) return;
+  const data = await search.json();
+  if (data.files && data.files.length > 0) {
+    _gSheetId = data.files[0].id;
+  } else {
+    // Crea nuovo foglio
+    const create = await gFetch('https://sheets.googleapis.com/v4/spreadsheets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        properties: { title: name },
+        sheets: [{ properties: { title: 'Timbrature' } }]
+      })
+    });
+    if (!create) return;
+    const sheet = await create.json();
+    _gSheetId = sheet.spreadsheetId;
+    // Intestazioni
+    await sheetsWrite([['Data','Bambino','Entrata','Uscita','Colazione','Pranzo','Merenda','Cena','Sincronizzato']]);
+  }
+  localStorage.setItem('g_sheet_id', _gSheetId);
+  await sheetsLoad();
+  showToast('Foglio Google Sheets pronto');
+}
+
+async function sheetsWrite(rows, append=true) {
+  if (!_gSheetId) return;
+  const url = append
+    ? `https://sheets.googleapis.com/v4/spreadsheets/${_gSheetId}/values/Timbrature!A1:I1000:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`
+    : `https://sheets.googleapis.com/v4/spreadsheets/${_gSheetId}/values/Timbrature!A1:I1000?valueInputOption=RAW`;
+  const method = append ? 'POST' : 'PUT';
+  await gFetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ values: rows })
+  });
+}
+
+async function sheetsLoad() {
+  if (!_gSheetId) return;
+  const resp = await gFetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${_gSheetId}/values/Timbrature!A2:I1000`
+  );
+  if (!resp) return;
+  const data = await resp.json();
+  const rows = data.values || [];
+  // Ricostruisci allLogs da foglio
+  const loaded = {};
+  rows.forEach(r => {
+    const [date,nome,tIn,tOut,col,pra,mer,cen,sync] = r;
+    if (!date || !nome) return;
+    const child = CHILDREN.find(c => (c.lastname+' '+c.name) === nome);
+    if (!child) return;
+    if (!loaded[date]) loaded[date] = [];
+    loaded[date].push({
+      recordcode: child.recordcode,
+      ts: date + 'T' + (tIn||'00:00') + ':00',
+      timeIn: tIn||'', timeOut: tOut||'',
+      chkColazione: col==='Si', chkPranzo: pra==='Si',
+      chkMerenda: mer==='Si', chkCena: cen==='Si',
+      chkPattuite: false, chkMalattia: false,
+      synced: sync==='Si'
+    });
+  });
+  // Merge: Drive ha precedenza
+  Object.keys(loaded).forEach(d => { allLogs[d] = loaded[d]; });
+  log = allLogs[activeDate] || [];
+  saveAllLogs();
+  renderChildren(); updateStats();
+}
+
+async function sheetsSave() {
+  if (!_gSheetId || !_gToken) return;
+  // Riscrivi tutto il foglio
+  const rows = [['Data','Bambino','Entrata','Uscita','Colazione','Pranzo','Merenda','Cena','Sincronizzato']];
+  Object.keys(allLogs).sort().forEach(date => {
+    (allLogs[date]||[]).forEach(e => {
+      const child = CHILDREN.find(c => c.recordcode === e.recordcode);
+      const nome = child ? child.lastname+' '+child.name : e.recordcode;
+      rows.push([date, nome, e.timeIn||'', e.timeOut||'',
+        e.chkColazione?'Si':'', e.chkPranzo?'Si':'',
+        e.chkMerenda?'Si':'', e.chkCena?'Si':'',
+        e.synced?'Si':'No']);
+    });
+  });
+  await sheetsWrite(rows, false);
+}
+
+async function driveSyncNow() {
+  showToast('Sincronizzazione...');
+  await sheetsLoad();
+  showToast('Sincronizzato con Google Sheets');
 }
 
 function driveLogout() {
@@ -901,12 +1088,11 @@ async function driveSyncNow() {
   showToast('Sincronizzato con Drive');
 }
 
-// Hook saveLog to also save on Drive
-const _origSaveLog = saveLog;
+// Hook: saveLog salva anche su Sheets
 function saveLog() {
   allLogs[activeDate] = log;
   saveAllLogs();
-  if (_gToken) driveSave();
+  if (_gToken) sheetsSave();
 }
 
 /* INIT */
