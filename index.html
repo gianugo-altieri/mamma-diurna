@@ -869,12 +869,16 @@ async function handleOAuthRedirect() {
 }
 
 function driveLogout() {
+  // Azzera tutto
   _gToken = null; _gRefresh = null; _gSheetId = null;
-  localStorage.removeItem('g_token');
-  localStorage.removeItem('g_refresh');
-  localStorage.removeItem('g_sheet_id');
-  updateDriveUI(false);
-  showToast('Disconnesso da Google');
+  // Pulisce localStorage completamente
+  const keysToKeep = ['afds_settings']; // mantieni solo le impostazioni
+  const saved = {};
+  keysToKeep.forEach(k => { const v = localStorage.getItem(k); if(v) saved[k] = v; });
+  localStorage.clear();
+  keysToKeep.forEach(k => { if(saved[k]) localStorage.setItem(k, saved[k]); });
+  // Ricarica la pagina — stato pulito garantito
+  window.location.reload();
 }
 // Forza ricerca/creazione foglio
 async function sheetsReinit() {
