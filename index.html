@@ -825,17 +825,21 @@ async function driveLogin() {
 }
 
 async function handleOAuthRedirect() {
+  console.log('handleOAuthRedirect — URL:', window.location.href);
+  console.log('search:', window.location.search);
+  console.log('hash:', window.location.hash);
   const params = new URLSearchParams(window.location.search);
   const code = params.get('code');
+  console.log('code:', code ? code.slice(0,20)+'...' : 'null');
   if (!code) {
     // Try to restore saved token
     const saved = localStorage.getItem('g_token');
     const sheetId = localStorage.getItem('g_sheet_id');
+    console.log('saved token:', saved ? 'yes' : 'no', 'sheetId:', sheetId);
     if (saved) {
       _gToken = saved;
       _gSheetId = sheetId || null;
       updateDriveUI(true);
-      // Se il foglio non esiste più, ricrealo
       sheetsInit();
     }
     return;
