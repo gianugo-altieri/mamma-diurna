@@ -869,21 +869,19 @@ async function handleOAuthRedirect() {
 }
 
 function driveLogout() {
-  // Azzera tutto
-  _gToken = null; _gRefresh = null; _gSheetId = null;
-  // Pulisce localStorage completamente
-  const keysToKeep = ['afds_settings']; // mantieni solo le impostazioni
-  const saved = {};
-  keysToKeep.forEach(k => { const v = localStorage.getItem(k); if(v) saved[k] = v; });
+  // Pulisce tutto tranne impostazioni
+  const settings = localStorage.getItem('afds_settings');
   localStorage.clear();
-  keysToKeep.forEach(k => { if(saved[k]) localStorage.setItem(k, saved[k]); });
-  // Ricarica la pagina — stato pulito garantito
-  window.location.reload();
+  sessionStorage.clear();
+  if (settings) localStorage.setItem('afds_settings', settings);
+  // Redirect con flag logout — impedisce il ripristino del token
+  window.location.href = window.location.pathname + '?logout=1';
 }
 // Forza ricerca/creazione foglio
 async function sheetsReinit() {
   _gSheetId = null;
   localStorage.removeItem('g_sheet_id');
+  showToast('Ricreazione foglio...');
   await sheetsInit();
 }
 
@@ -951,8 +949,8 @@ async function sheetsInit() {
     await sheetsWrite([['Data','Bambino','Entrata','Uscita','Malattia 50%','Pattuite','Colazione','Pranzo','Merenda','Cena','Sincronizzato']]);
   }
   localStorage.setItem('g_sheet_id', _gSheetId);
+  showToast('Foglio creato: ' + _gSheetId.slice(0,8) + '...');
   await sheetsLoad();
-  showToast('Foglio Google Sheets pronto');
 }
 
 async function sheetsWrite(rows, append=true) {
