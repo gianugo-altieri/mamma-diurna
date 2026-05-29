@@ -250,6 +250,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
     <button class="btn-primary" id="btnDriveLogin" onclick="driveLogin()">Accedi con Google</button>
     <button class="btn-secondary" id="btnDriveLogout" style="display:none" onclick="driveLogout()">Disconnetti</button>
     <button class="btn-secondary" id="btnDriveSync" style="display:none" onclick="driveSyncNow()">Sincronizza ora</button>
+    <button class="btn-secondary" id="btnDriveReinit" style="display:none" onclick="sheetsReinit()">Ricrea foglio</button>
   </div>
   <div style="font-size:12px;color:var(--text3);padding:0 4px">Dopo il timeout, la data torna automaticamente ad oggi se hai selezionato un giorno passato.</div>
 </div>
@@ -830,7 +831,13 @@ async function handleOAuthRedirect() {
     // Try to restore saved token
     const saved = localStorage.getItem('g_token');
     const sheetId = localStorage.getItem('g_sheet_id');
-    if (saved) { _gToken = saved; _gSheetId = sheetId; updateDriveUI(true); sheetsLoad(); }
+    if (saved) {
+      _gToken = saved;
+      _gSheetId = sheetId || null;
+      updateDriveUI(true);
+      // Se il foglio non esiste più, ricrealo
+      sheetsInit();
+    }
     return;
   }
   // Exchange code for token via worker
@@ -869,6 +876,12 @@ function driveLogout() {
   updateDriveUI(false);
   showToast('Disconnesso da Google');
 }
+// Forza ricerca/creazione foglio
+async function sheetsReinit() {
+  _gSheetId = null;
+  localStorage.removeItem('g_sheet_id');
+  await sheetsInit();
+}
 
 function updateDriveUI(connected) {
   const status = document.getElementById('driveStatus');
@@ -882,12 +895,16 @@ function updateDriveUI(connected) {
     btnLogin.style.display = 'none';
     btnLogout.style.display = 'block';
     btnSync.style.display = 'block';
+    const btnReinit = document.getElementById('btnDriveReinit');
+    if (btnReinit) btnReinit.style.display = 'block';
   } else {
     status.textContent = 'Non connesso';
     status.style.color = 'var(--text3)';
     btnLogin.style.display = 'block';
     btnLogout.style.display = 'none';
     btnSync.style.display = 'none';
+    const btnReinit2 = document.getElementById('btnDriveReinit');
+    if (btnReinit2) btnReinit2.style.display = 'none';
   }
 }
 
@@ -1006,7 +1023,11 @@ async function sheetsSave() {
 
 async function driveSyncNow() {
   showToast('Sincronizzazione...');
-  await sheetsLoad();
+  if (!_gSheetId) {
+    await sheetsInit();
+  } else {
+    await sheetsLoad();
+  }
   showToast('Sincronizzato con Google Sheets');
 }
 
@@ -1029,12 +1050,16 @@ function updateDriveUI(connected) {
     btnLogin.style.display = 'none';
     btnLogout.style.display = 'block';
     btnSync.style.display = 'block';
+    const btnReinit = document.getElementById('btnDriveReinit');
+    if (btnReinit) btnReinit.style.display = 'block';
   } else {
     status.textContent = 'Non connesso';
     status.style.color = 'var(--text3)';
     btnLogin.style.display = 'block';
     btnLogout.style.display = 'none';
     btnSync.style.display = 'none';
+    const btnReinit2 = document.getElementById('btnDriveReinit');
+    if (btnReinit2) btnReinit2.style.display = 'none';
   }
 }
 
