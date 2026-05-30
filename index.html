@@ -848,8 +848,10 @@ async function handleOAuthRedirect() {
   history.replaceState(null, '', G_REDIRECT);
   const verifier = localStorage.getItem('pkce_verifier');
   localStorage.removeItem('pkce_verifier');
-  const base = getBaseURL().replace('/api','');
-  console.log('Token exchange — base:', base, 'verifier:', verifier ? verifier.slice(0,10)+'...' : 'NULL');
+  const s = getSettings();
+  const proxyBase = (s.proxyUrl||'').trim().replace(/\/+$/,'');
+  console.log('Token exchange — proxyBase:', proxyBase, 'verifier:', verifier ? verifier.slice(0,10)+'...' : 'NULL');
+  const base = proxyBase;
   try {
     const resp = await fetch(base + '/auth/token', {
       method: 'POST',
