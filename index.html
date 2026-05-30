@@ -1043,8 +1043,8 @@ async function driveSyncNow() {
 }
 
 function driveLogout() {
-  _gToken = null; _gFileId = null;
-  localStorage.removeItem('gdrive_token');
+  _gToken = null;
+  
   updateDriveUI(false);
 }
 
@@ -1083,68 +1083,57 @@ async function driveFetch(url, opts={}) {
   return resp;
 }
 
-async function driveFindFile() {
-  const s = getSettings();
-  const fname = 'afds-timbrature-' + (s.name||'utente').toLowerCase().replace(/\s+/g,'-') + '.json';
-  const r = await driveFetch(
-    `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name='${fname}'&fields=files(id,name)`
-  );
-  if (!r) return null;
-  const d = await r.json();
-  if (d.files && d.files.length > 0) { _gFileId = d.files[0].id; return _gFileId; }
-  return null;
-}
-
-async function driveLoad() {
-  const fileId = await driveFindFile();
-  if (!fileId) { await driveSave(); return; } // primo avvio: salva locale su drive
-  const r = await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`);
-  if (!r) return;
-  try {
-    const data = await r.json();
-    if (data.allLogs) {
-      allLogs = data.allLogs;
-      log = allLogs[activeDate] || [];
-      renderChildren(); updateStats();
-      showToast('Dati caricati da Drive');
-    }
-  } catch(e) { console.error('Drive load error:', e); }
-}
-
-async function driveSave() {
-  if (!_gToken) return;
-  const s = getSettings();
-  const fname = 'afds-timbrature-' + (s.name||'utente').toLowerCase().replace(/\s+/g,'-') + '.json';
-  const body = JSON.stringify({ allLogs, savedAt: new Date().toISOString() });
-  const meta = JSON.stringify({ name: fname, parents: ['appDataFolder'] });
-
-  if (!_gFileId) await driveFindFile();
-
-  if (_gFileId) {
-    // Update existing
-    await driveFetch(`https://www.googleapis.com/upload/drive/v3/files/${_gFileId}?uploadType=media`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body
-    });
+async function driveSyncNow() {
+  showToast('Sincronizzazione...');
+  if (!_gSheetId) {
+    await sheetsInit();
   } else {
-    // Create new
-    const form = new FormData();
-    form.append('metadata', new Blob([meta], { type: 'application/json' }));
-    form.append('file', new Blob([body], { type: 'application/json' }));
-    const r = await driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-      method: 'POST', body: form
-    });
-    if (r) { const d = await r.json(); _gFileId = d.id; }
+    await sheetsLoad();
+  }
+  showToast('Sincronizzato con Google Sheets');
+}
+
+function driveLogout() {
+  _gToken = null;
+  
+  updateDriveUI(false);
+}
+
+function updateDriveUI(connected) {
+  const status = document.getElementById('driveStatus');
+  const btnLogin = document.getElementById('btnDriveLogin');
+  const btnLogout = document.getElementById('btnDriveLogout');
+  const btnSync = document.getElementById('btnDriveSync');
+  if (!status) return;
+  if (connected) {
+    status.textContent = 'Connesso ✓ — dati sincronizzati su Drive';
+    status.style.color = 'var(--accent)';
+    btnLogin.style.display = 'none';
+    btnLogout.style.display = 'block';
+    btnSync.style.display = 'block';
+    const btnReinit = document.getElementById('btnDriveReinit');
+    if (btnReinit) btnReinit.style.display = 'block';
+  } else {
+    status.textContent = 'Non connesso';
+    status.style.color = 'var(--text3)';
+    btnLogin.style.display = 'block';
+    btnLogout.style.display = 'none';
+    btnSync.style.display = 'none';
+    const btnReinit2 = document.getElementById('btnDriveReinit');
+    if (btnReinit2) btnReinit2.style.display = 'none';
   }
 }
 
-async function driveSyncNow() {
-  showToast('Sincronizzazione...');
-  await driveLoad();
-  await driveSave();
-  showToast('Sincronizzato con Drive');
+async function driveFetch(url, opts={}) {
+  if (!_gToken) return null;
+  const resp = await fetch(url, {
+    ...opts,
+    headers: { 'Authorization': 'Bearer ' + _gToken, ...(opts.headers||{}) }
+  });
+  if (resp.status === 401) { driveLogout(); return null; }
+  return resp;
 }
+
 
 // Hook: saveLog salva anche su Sheets
 function saveLog() {
