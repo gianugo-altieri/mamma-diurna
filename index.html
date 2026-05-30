@@ -932,8 +932,7 @@ async function gFetch(url, opts={}) {
 
 async function sheetsInit() {
   // Cerca foglio esistente o ne crea uno nuovo
-  const s = getSettings();
-  const name = 'Mamma Diurna - ' + (s.name || 'Altieri');
+  const name = 'Mamma Diurna - Timbrature';
   // Cerca
   const search = await gFetch(
     `https://www.googleapis.com/drive/v3/files?q=name='${name}' and mimeType='application/vnd.google-apps.spreadsheet'&fields=files(id,name)`
@@ -1044,7 +1043,6 @@ async function driveSyncNow() {
 }
 
 function driveLogout() {
-  if (_gToken) google.accounts.oauth2.revoke(_gToken);
   _gToken = null; _gFileId = null;
   localStorage.removeItem('gdrive_token');
   updateDriveUI(false);
