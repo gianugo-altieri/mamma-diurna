@@ -1083,12 +1083,19 @@ async function sheetsSave() {
     return (a.timeIn||'').localeCompare(b.timeIn||'');
   });
   allRows.forEach(r => rows.push(r.row));
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${_gSheetId}/values/Timbrature!A1:K${rows.length}?valueInputOption=RAW`;
-  await gFetch(url, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ values: rows })
-  });
+  // Prima svuota tutto il foglio (fino a riga 1000), poi riscrivi
+  await gFetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${_gSheetId}/values/Timbrature!A1:K1000:clear`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' } }
+  );
+  await gFetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${_gSheetId}/values/Timbrature!A1:K${rows.length}?valueInputOption=RAW`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ values: rows })
+    }
+  );
 }
 
 async function driveSyncNow() {
