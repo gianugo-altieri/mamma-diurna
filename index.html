@@ -609,7 +609,15 @@ function updateStats(){
   const el=document.getElementById('statOre');
   if(el) el.textContent=h+':'+String(m).padStart(2,'0');
 }
-function deleteEntry(idx){resetInactivityTimer();log.splice(idx,1);saveLog();renderChildren();updateStats();showToast('Timbratura eliminata')}
+function deleteEntry(idx){
+  resetInactivityTimer();
+  log.splice(idx,1);
+  allLogs[activeDate]=log;
+  saveAllLogs();
+  if(_gToken&&navigator.onLine) sheetsSave();
+  renderChildren();updateStats();
+  showToast('Timbratura eliminata');
+}
 
 function goToChildModal(recordcode){
   // Switch to bambini tab and open modal
