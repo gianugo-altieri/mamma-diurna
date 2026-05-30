@@ -80,6 +80,8 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 .child-row-hint{display:none}
 .child-log-entries{border-top:1px solid var(--border)}
 .child-log-row{display:flex;align-items:center;gap:10px;padding:7px 14px 7px 60px;border-bottom:1px solid var(--border);font-size:13px}
+.child-log-row.pending{opacity:0.45}
+.child-log-row.pending .log-times::after{content:' ⏳';font-size:10px}
 .child-log-row:last-child{border-bottom:none}
 .log-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;background:var(--accent)}
 .log-times{font-family:'DM Mono',monospace;font-size:12px;color:var(--text2);flex:1}
@@ -573,7 +575,7 @@ function renderChildren(){
       const ri=log.indexOf(e);
       const times=[e.timeIn,e.timeOut].filter(Boolean).join(' -> ');
       const extras=['Pattuite','Malattia','Colazione','Pranzo','Merenda','Cena'].filter(k=>e['chk'+k]).join(', ');
-      logRows+=`<div class="child-log-row" onclick="event.stopPropagation();openModal('${c.recordcode}',${ri})">
+      logRows+=`<div class="child-log-row${e.synced===false?' pending':''}" onclick="event.stopPropagation();openModal('${c.recordcode}',${ri})">
         <div class="log-dot"></div>
         <div class="log-times">${times}</div>
         <div class="log-extras">${extras}</div>
@@ -978,50 +980,94 @@ async function sheetsWrite(rows, append=true) {
 async function sheetsLoad() {
   if (!_gSheetId) return;
   const resp = await gFetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${_gSheetId}/values/Timbrature!A2:I1000`
+    `https://sheets.googleapis.com/v4/spreadsheets/${_gSheetId}/values/Timbrature!A2:K1000`
   );
   if (!resp) return;
   const data = await resp.json();
   const rows = data.values || [];
-  // Ricostruisci allLogs da foglio
-  const loaded = {};
+
+  // Ricostruisci allLogs dal foglio — il foglio comanda
+  const fromSheet = {};
   rows.forEach(r => {
-    const [date,nome,tIn,tOut,col,pra,mer,cen,sync] = r;
+    const [date,nome,tIn,tOut,mal,pat,col,pra,mer,cen,updatedAt] = r;
     if (!date || !nome) return;
     const child = CHILDREN.find(c => (c.lastname+' '+c.name) === nome);
     if (!child) return;
-    if (!loaded[date]) loaded[date] = [];
-    loaded[date].push({
+    if (!fromSheet[date]) fromSheet[date] = [];
+    fromSheet[date].push({
       recordcode: child.recordcode,
-      ts: date + 'T' + (tIn||'00:00') + ':00',
+      ts: updatedAt || (date+'T'+(tIn||'00:00')+':00'),
+      updatedAt: updatedAt || '',
       timeIn: tIn||'', timeOut: tOut||'',
+      chkMalattia: mal==='Si', chkPattuite: pat==='Si',
       chkColazione: col==='Si', chkPranzo: pra==='Si',
       chkMerenda: mer==='Si', chkCena: cen==='Si',
-      chkPattuite: false, chkMalattia: false,
-      synced: sync==='Si'
+      synced: true
     });
   });
-  // Merge: Drive ha precedenza
-  Object.keys(loaded).forEach(d => { allLogs[d] = loaded[d]; });
-  log = allLogs[activeDate] || [];
+
+  // Bootstrap: se foglio vuoto e ci sono dati locali, scrivi locali sul foglio
+  const sheetIsEmpty = Object.keys(fromSheet).length === 0;
+  const hasLocalData = Object.values(allLogs).some(d => d.length > 0);
+  if (sheetIsEmpty && hasLocalData) {
+    console.log('Bootstrap: scrivo dati locali sul foglio');
+    await sheetsSave();
+    // Marca tutto come synced
+    Object.values(allLogs).forEach(entries =>
+      entries.forEach(e => { e.synced = true; })
+    );
+    saveAllLogs();
+    log = allLogs[activeDate] || [];
+    renderChildren(); updateStats();
+    return;
+  }
+
+  // Foglio ha dati — sostituisce tutto il locale (foglio comanda)
+  // Ma mantieni le timbrature pending (synced:false) dal locale
+  const pending = [];
+  Object.keys(allLogs).forEach(date => {
+    (allLogs[date]||[]).forEach(e => {
+      if (!e.synced) pending.push({...e, date});
+    });
+  });
+
+  // Parti dal foglio
+  allLogs = fromSheet;
+
+  // Re-aggiungi pending che non sono già sul foglio (dedup per data+bambino+entrata)
+  pending.forEach(p => {
+    const dayRows = allLogs[p.date] || [];
+    const exists = dayRows.some(r =>
+      r.recordcode === p.recordcode && r.timeIn === p.timeIn
+    );
+    if (!exists) {
+      if (!allLogs[p.date]) allLogs[p.date] = [];
+      allLogs[p.date].push(p);
+    }
+  });
+
   saveAllLogs();
+  log = allLogs[activeDate] || [];
   renderChildren(); updateStats();
 }
 
 async function sheetsSave() {
   if (!_gSheetId || !_gToken) return;
-  // Riscrivi tutto il foglio
-  const rows = [['Data','Bambino','Entrata','Uscita','Malattia 50%','Pattuite non usufruite','Colazione','Pranzo','Merenda','Cena','Sincronizzato']];
-  // Raccoglie tutte le righe e le ordina per data poi per ora entrata
+  const now = new Date().toISOString();
+  const rows = [['Data','Bambino','Entrata','Uscita','Malattia 50%','Pattuite non usufruite','Colazione','Pranzo','Merenda','Cena','Aggiornato']];
   const allRows = [];
   Object.keys(allLogs).sort().forEach(date => {
     (allLogs[date]||[]).forEach(e => {
+      if (!e.synced) return; // Non scrivere pending — restano grigi finché offline
       const child = CHILDREN.find(c => c.recordcode === e.recordcode);
       const nome = child ? child.lastname+' '+child.name : e.recordcode;
-      allRows.push({ date, timeIn: e.timeIn||'', row: [date, nome, e.timeIn||'', e.timeOut||'',
+      allRows.push({ date, timeIn: e.timeIn||'', row: [
+        date, nome, e.timeIn||'', e.timeOut||'',
+        e.chkMalattia?'Si':'', e.chkPattuite?'Si':'',
         e.chkColazione?'Si':'', e.chkPranzo?'Si':'',
         e.chkMerenda?'Si':'', e.chkCena?'Si':'',
-        e.synced?'Si':'No'] });
+        e.updatedAt || now
+      ]});
     });
   });
   allRows.sort((a,b) => {
@@ -1029,7 +1075,12 @@ async function sheetsSave() {
     return (a.timeIn||'').localeCompare(b.timeIn||'');
   });
   allRows.forEach(r => rows.push(r.row));
-  await sheetsWrite(rows, false);
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${_gSheetId}/values/Timbrature!A1:K${rows.length}?valueInputOption=RAW`;
+  await gFetch(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ values: rows })
+  });
 }
 
 async function driveSyncNow() {
@@ -1135,16 +1186,46 @@ async function driveFetch(url, opts={}) {
 }
 
 
-// Hook: saveLog salva anche su Sheets
+// Hook: saveLog — Sheets comanda, localStorage è cache offline
 function saveLog() {
   allLogs[activeDate] = log;
-  // Salva sempre su Sheets se connesso, localStorage solo come fallback offline
-  if (_gToken) {
-    sheetsSave();
-  } else {
+  saveAllLogs();
+  if (_gToken && navigator.onLine) {
+    // Marca tutto il giorno come synced prima di scrivere
+    (allLogs[activeDate]||[]).forEach(e => {
+      e.synced = true;
+      e.updatedAt = new Date().toISOString();
+    });
     saveAllLogs();
+    sheetsSave();
   }
+  // Se offline, le timbrature restano synced:false (grigie)
+  renderChildren(); // aggiorna colori
 }
+
+// Quando torna online, scrivi le pending sul foglio
+window.addEventListener('online', async () => {
+  if (!_gToken || !_gSheetId) return;
+  const pending = [];
+  Object.keys(allLogs).forEach(date => {
+    (allLogs[date]||[]).forEach(e => { if (!e.synced) pending.push({e, date}); });
+  });
+  if (pending.length === 0) return;
+  showToast('Connesso — carico ' + pending.length + ' timbrature in sospeso...');
+  // Carica foglio corrente
+  await sheetsLoad();
+  // Le pending sono state re-integrate in sheetsLoad, ora le marco synced e salvo
+  Object.keys(allLogs).forEach(date => {
+    (allLogs[date]||[]).forEach(e => {
+      if (!e.synced) { e.synced = true; e.updatedAt = new Date().toISOString(); }
+    });
+  });
+  saveAllLogs();
+  await sheetsSave();
+  log = allLogs[activeDate] || [];
+  renderChildren(); updateStats();
+  showToast('Timbrature sincronizzate');
+});
 
 /* INIT */
 loadSettings();
