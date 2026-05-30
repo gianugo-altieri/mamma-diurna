@@ -849,13 +849,16 @@ async function handleOAuthRedirect() {
   const verifier = localStorage.getItem('pkce_verifier');
   localStorage.removeItem('pkce_verifier');
   const base = getBaseURL().replace('/api','');
+  console.log('Token exchange — base:', base, 'verifier:', verifier ? verifier.slice(0,10)+'...' : 'NULL');
   try {
     const resp = await fetch(base + '/auth/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code, code_verifier: verifier })
     });
+    console.log('Token exchange — HTTP status:', resp.status);
     const data = await resp.json();
+    console.log('Token exchange — response keys:', Object.keys(data), 'error:', data.error, 'error_description:', data.error_description);
     if (data.access_token) {
       _gToken = data.access_token;
       _gRefresh = data.refresh_token;
@@ -865,9 +868,10 @@ async function handleOAuthRedirect() {
       showToast('Connesso a Google');
       await sheetsInit();
     } else {
-      showToast('Errore login: ' + (data.error || 'sconosciuto'));
+      showToast('Errore login: ' + (data.error||'') + ' ' + (data.error_description||''));
     }
   } catch(e) {
+    console.error('Token exchange exception:', e);
     showToast('Errore connessione: ' + e.message);
   }
 }
