@@ -141,6 +141,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 .btn-cancel:active{background:#922b21}
 
 @keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.6}}
 .spinner{display:inline-block;width:18px;height:18px;border:2px solid rgba(255,255,255,.4);border-top-color:white;border-radius:50%;animation:spin .7s linear infinite}
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);background:#1a1a1a;color:white;padding:12px 20px;border-radius:24px;font-size:13px;font-weight:500;z-index:999;transition:transform .3s cubic-bezier(.34,1.56,.64,1);white-space:nowrap;max-width:320px}
 .toast.show{transform:translateX(-50%) translateY(0)}
@@ -825,17 +826,16 @@ async function driveLogin() {
 }
 
 async function handleOAuthRedirect() {
-  console.log('handleOAuthRedirect — URL:', window.location.href);
-  console.log('search:', window.location.search);
-  console.log('hash:', window.location.hash);
   const params = new URLSearchParams(window.location.search);
   const code = params.get('code');
-  console.log('code:', code ? code.slice(0,20)+'...' : 'null');
+  // Pulisci subito l'URL dai parametri OAuth — non aspettare
+  if (code || params.get('iss')) {
+    history.replaceState(null, '', window.location.pathname);
+  }
   if (!code) {
     // Try to restore saved token
     const saved = localStorage.getItem('g_token');
     const sheetId = localStorage.getItem('g_sheet_id');
-    console.log('saved token:', saved ? 'yes' : 'no', 'sheetId:', sheetId);
     if (saved) {
       _gToken = saved;
       _gSheetId = sheetId || null;
@@ -955,7 +955,7 @@ async function sheetsInit() {
     const sheet = await create.json();
     _gSheetId = sheet.spreadsheetId;
     // Intestazioni
-    await sheetsWrite([['Data','Bambino','Entrata','Uscita','Malattia 50%','Pattuite','Colazione','Pranzo','Merenda','Cena','Sincronizzato']]);
+    await sheetsWrite([['Data','Bambino','Entrata','Uscita','Malattia 50%','Pattuite non usufruite','Colazione','Pranzo','Merenda','Cena','Sincronizzato']]);
   }
   localStorage.setItem('g_sheet_id', _gSheetId);
   showToast('Foglio creato: ' + _gSheetId.slice(0,8) + '...');
@@ -1011,7 +1011,7 @@ async function sheetsLoad() {
 async function sheetsSave() {
   if (!_gSheetId || !_gToken) return;
   // Riscrivi tutto il foglio
-  const rows = [['Data','Bambino','Entrata','Uscita','Colazione','Pranzo','Merenda','Cena','Sincronizzato']];
+  const rows = [['Data','Bambino','Entrata','Uscita','Malattia 50%','Pattuite non usufruite','Colazione','Pranzo','Merenda','Cena','Sincronizzato']];
   // Raccoglie tutte le righe e le ordina per data poi per ora entrata
   const allRows = [];
   Object.keys(allLogs).sort().forEach(date => {
@@ -1170,7 +1170,21 @@ loadSettings();
   if(from) from.value = y+'-'+m+'-01';
   if(to) to.value = y+'-'+m+'-'+String(lastDay).padStart(2,'0');
 })();
-handleOAuthRedirect();
+handleOAuthRedirect().then(()=>{
+  // Se non connesso dopo il tentativo di ripristino, mostra impostazioni
+  if (!_gToken) {
+    // Nascondi tutto tranne settings
+    document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+    document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+    document.getElementById('page-settings').classList.add('active');
+    document.querySelectorAll('.nav-btn')[2].classList.add('active');
+    // Focus sul bottone login
+    setTimeout(()=>{
+      const btn = document.getElementById('btnDriveLogin');
+      if(btn){ btn.scrollIntoView({behavior:'smooth'}); btn.style.animation='pulse 1s infinite'; }
+    }, 300);
+  }
+});
 updateDateDisplay();
 renderChildren();
 updateStats();
